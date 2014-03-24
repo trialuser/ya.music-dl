@@ -101,6 +101,7 @@ has json => sub { Mojo::JSON->new };
 
 has artist_albums_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/artist_albums_list.xml?artist=0'); };
 has playlist_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own'); };
+has playlist_url_tracks =>  sub { Mojo::URL->new('http://music.yandex.ru/get/tracks.xml?tracks=0'); };
 has track_url =>  sub { Mojo::URL->new('http://music.yandex.ru/external/embed-track.xml?track-id=0'); };
 has album_tracks_url =>  'http://music.yandex.ru/fragment/album/';
 has info_url => 'http://storage.music.yandex.ru/download-info/';
@@ -142,6 +143,25 @@ sub get_playlist_tracks {
 	$playlist_url->query->param( owner => $playlist_owner);
 	my $tx = $self->ua->get($playlist_url);
 	warn 'ERROR get get_playlist_tracks for ' . $playlist_id . ' : ' . $tx->error and return undef if $tx->error;
+	#return $tx->res->json;
+	
+	
+	my $tracks = $tx->res->json->{playlists}[0]{tracks};
+	#$title = Encode::encode('cp1251', $title);
+	my $i = 0;
+	my $tracks_url="";
+	for my $track_id (@{$tracks}){
+		$i+=1;
+		$tracks_url = $tracks_url .",".$track_id;
+	}
+	$tracks_url =~ s/^,//;
+	
+	print "Getting the list, total: ".$i." track(s)\n";
+	my $playlist_url_tracks = $self->playlist_url_tracks->clone;
+	$playlist_url_tracks->query->param( tracks => $tracks_url);
+	my $tx2 = $self->ua->get($playlist_url_tracks);
+	warn 'ERROR get get_playlist_tracks for ' . $i . ' track(s) : ' . $tx2->error and return undef if $tx2->error;
+	$tx->res->json->{tracks} = $tx2->res->json->{tracks};
 	return $tx->res->json;
 }
 # # # # # # # # # # 
@@ -180,19 +200,29 @@ sub get_album_tracks {
 sub get_track {
 	my ($self, $track_id) = (shift, shift);
 	
-	my $track_url = $self->track_url->clone;
-	$track_url->query->param( 'track-id' => $track_id);
-	my $tx = $self->ua->get($track_url);
-	warn 'ERROR get get_track for ' . $track_id . ' : ' . $tx->error and return undef if $tx->error;
-	my $dom = $tx->res->dom;
-	my $track_hash;
-	$track_hash->{'title'} = $tx->res->dom->at('title')->text;
-	$track_hash->{'id'} = $tx->res->dom->at('track')->attr('id');
-	$track_hash->{'artist'} = $tx->res->dom->at('artist')->at('name')->text;
-	$track_hash->{'album'} = $tx->res->dom->at('album')->at('title')->text;
-	$track_hash->{'storage_dir'} = $tx->res->dom->at('track')->attr('storage-dir');
+	# my $track_url = $self->track_url->clone;
+	# $track_url->query->param( 'track-id' => $track_id);
+	# my $tx = $self->ua->get($track_url);
+	# warn 'ERROR get get_track for ' . $track_id . ' : ' . $tx->error and return undef if $tx->error;
+	# my $dom = $tx->res->dom;
+	# my $track_hash;
+	# $track_hash->{'title'} = $tx->res->dom->at('title')->text;
+	# $track_hash->{'id'} = $tx->res->dom->at('track')->attr('id');
+	# $track_hash->{'artist'} = $tx->res->dom->at('artist')->at('name')->text;
+	# $track_hash->{'album'} = $tx->res->dom->at('album')->at('title')->text;
+	# $track_hash->{'storage_dir'} = $tx->res->dom->at('track')->attr('storage-dir');
 	
-	return $track_hash;
+	
+	
+	my $playlist_url_tracks = $self->playlist_url_tracks->clone;
+	$playlist_url_tracks->query->param( tracks => $track_id);
+	my $tx2 = $self->ua->get($playlist_url_tracks);
+	warn 'ERROR get get_playlist_tracks for track_id: ' . $track_id . ' : ' . $tx2->error and return undef if $tx2->error;
+	#$tx->res->json->{tracks} = $tx2->res->json->{tracks};
+	return $tx2->res->json;
+	
+	
+	#return $track_hash;
 }
 # # # # # # # # # # 
 # Dowload and save track with path: <Artist>/<Date>-<Album>/<Num>-<Track>
@@ -290,6 +320,7 @@ sub save_track_playlist {
 	$tmp_string = $mp3_local;
 	$tmp_string = Encode::encode('cp866', $tmp_string);
 	$mp3_local = Encode::encode('cp1251', $mp3_local);
+	$mp3_local =~ s/\?/_/;
 	say 'WORKING ON ' . $tmp_string . ' <<< ' . $mp3_url;
 	say 'SKIPPING coz exists ' . $tmp_string and return undef if -f $mp3_local;
 	
@@ -315,7 +346,7 @@ sub download_playlist {
 	my $playlist_hash = $self->get_playlist_tracks( $playlist_id, $playlist_owner);
 	
 	my $title = $playlist_hash->{playlists}[0]{title};
-	#$title = Encode::encode('cp1251', $title);
+#	#$title = Encode::encode('cp1251', $title);
 	$self->save_path($self->base_path."@".$playlist_owner."/".$playlist_id." - ".$title."/");
 	my $i = 0;
 	for my $track_hash (@{$playlist_hash->{tracks}}){
@@ -350,12 +381,18 @@ sub download_album {
 #  <Artist>/<Album>/<Track>
 sub download_track {
 	my ($self, $track_id) = (shift, shift);
-	my $track_hash = $self->get_track($track_id);
-	my $artist = $track_hash->{artist};
-	$artist =~ s{/}{ }g;
-	$self->save_path($self->base_path ."". $artist ."/". $track_hash->{album} ."/"); 
-	#print_hash($track_hash);
-	$self->save_track( $track_hash );
+	my $track_hashs = $self->get_track($track_id);
+	my $i = 0;
+	for my $track_hash (@{$track_hashs->{tracks}}){
+		if ($i == 0) { 
+			my $artist = $track_hash->{artist};
+			$artist =~ s{/}{ }g;
+			$self->save_path($self->base_path ."". $artist ."/". $track_hash->{album} ."/"); 
+		}
+		$i+=1;
+		#print_hash($track_hash);
+		$self->save_track( $track_hash );
+	}
 }
 # # # # # # # # # # 
 # download all albums of artist by artist_id
