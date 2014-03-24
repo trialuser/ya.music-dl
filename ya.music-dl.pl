@@ -1,3 +1,4 @@
+#!/usr/bin/perl -w
 package YandexMusikDownloader;
 use Mojo::Base -base;
 use Mojo::UserAgent;
@@ -8,7 +9,7 @@ use autodie;
 use Cwd;
 use File::Spec;
 use File::Path qw/make_path/;
-use utf8;
+#use utf8;
 
 $ENV{MOJO_MAX_MESSAGE_SIZE} = 9_999_999_999;
 
@@ -151,8 +152,8 @@ sub download_track {
 	my $title = $track_hash->{title};
 	$title =~ s{/}{ }g;
 	
-	utf8::encode($artist);
-	utf8::encode($title);
+	#utf8::encode($artist);
+	#utf8::encode($title);
 	
 	my $info_url_mp3 = $self->info_url . $track_hash->{storage_dir} . '/2.mp3?nc=' . rand;
 	
@@ -174,11 +175,18 @@ sub download_track {
 	
 	my $mp3_local_path = File::Spec->catfile( getcwd, $self->base_path , $artist ,  $track_hash->{album});
 	
-	make_path($mp3_local_path) unless -d $mp3_local_path;
+	my $tmp_string;
+	
+	$tmp_string = $mp3_local_path;
+	$tmp_string = Encode::encode('cp1251', $tmp_string);
+	make_path($tmp_string) unless -d $tmp_string;
 	my $mp3_local = File::Spec->catfile($mp3_local_path, $artist . ' - ' . $title . '.mp3');
 	
-	say 'WORKING ON ' . $mp3_local . ' <<< ' . $mp3_url;
-	say 'SKIPPING coz exists ' . $mp3_local and return undef if -f $mp3_local;
+	$tmp_string = $mp3_local;
+	$tmp_string = Encode::encode('cp866', $tmp_string);
+	$mp3_local = Encode::encode('cp1251', $mp3_local);
+	say 'WORKING ON ' . $tmp_string . ' <<< ' . $mp3_url;
+	say 'SKIPPING coz exists ' . $tmp_string and return undef if -f $mp3_local;
 	
 	my $tx_mp3 = $self->ua->get($mp3_url => { Referer => $self->ref_url } );
 	say 'ERROR GET MP3: ' . $tx_mp3->error and return undef if $tx_mp3->error;
@@ -453,7 +461,7 @@ sub track_path_pp{
 ########################################################################
 package main;
 use Getopt::Long;
-use utf8;
+#use utf8;
 
 my $albums = "";
 my $artists = "";
