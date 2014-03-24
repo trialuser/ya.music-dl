@@ -3,6 +3,7 @@ package YandexMusikDownloader;
 use Mojo::Base -base;
 use Mojo::UserAgent;
 use Mojo::JSON;
+use Mojo::DOM;
 use Mojo::URL;
 use POSIX qw(strftime);
 use autodie;
@@ -99,10 +100,21 @@ has ua => sub{
 has json => sub { Mojo::JSON->new };
 
 has artist_albums_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/artist_albums_list.xml?artist=0'); };
+has playlist_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own'); };
+has track_url =>  sub { Mojo::URL->new('http://music.yandex.ru/external/embed-track.xml?track-id=0'); };
 has album_tracks_url =>  'http://music.yandex.ru/fragment/album/';
 has info_url => 'http://storage.music.yandex.ru/download-info/';
 has ref_url => 'http://swf.static.yandex.net/music/service-player.swf?v=12.27.1&proxy-host=http://storage.music.yandex.ru';
 has base_path => './yandex-musik/';
+
+sub print_hash {
+    my $href = shift;
+    while( my( $key, $val ) = each %{$href} ) {
+        print " $key\t=>$val\n";
+    }
+}
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 sub artist_albums {
 	my ($self, $artist_id) = (shift, shift);
@@ -115,7 +127,17 @@ sub artist_albums {
 
 	return $tx->res->json;
 }
-
+sub playlist_tracks {
+	my ($self, $playlist_id, $playlist_owner) = (shift, shift, shift);
+	
+	say "downloading playlist: ".$playlist_id.", owner: ".$playlist_owner;
+	my $playlist_url = $self->playlist_url->clone;
+	$playlist_url->query->param( kinds => $playlist_id);
+	$playlist_url->query->param( owner => $playlist_owner);
+	my $tx = $self->ua->get($playlist_url);
+	warn 'ERROR get playlist_tracks for ' . $playlist_id . ' : ' . $tx->error and return undef if $tx->error;
+	return $tx->res->json;
+}
 sub album_tracks {
 	my ($self, $album_id) = (shift, shift);
 	my $album_url = Mojo::URL->new( $self->album_tracks_url . $album_id );
@@ -142,7 +164,25 @@ sub album_tracks {
 	
 	return $res;
 }
-
+sub download_one_track {
+	my ($self, $track_id) = (shift, shift);
+	#http://music.yandex.ru/external/embed-track.xml?track-id=8658619
+	
+	say "downloading track: ".$track_id;
+	my $track_url = $self->track_url->clone;
+	$track_url->query->param( 'track-id' => $track_id);
+	my $tx = $self->ua->get($track_url);
+	warn 'ERROR get download_one_track for ' . $track_id . ' : ' . $tx->error and return undef if $tx->error;
+	my $dom = $tx->res->dom;
+	my $track_hash;
+	$track_hash->{'title'} = $tx->res->dom->at('title')->text;
+	$track_hash->{'id'} = $tx->res->dom->at('track')->attr('id');
+	$track_hash->{'artist'} = $tx->res->dom->at('artist')->at('name')->text;
+	$track_hash->{'album'} = $tx->res->dom->at('album')->at('title')->text;
+	$track_hash->{'storage_dir'} = $tx->res->dom->at('track')->attr('storage-dir');
+	$self->download_track( $track_hash );
+	return;
+}
 sub download_track {
 	my ($self, $track_hash) = (shift, shift);
 	
@@ -197,6 +237,76 @@ sub download_track {
 	close($mp3h);
 }
 
+sub download_next_track {
+	my ($self, $track_hash, $npp) = (shift, shift, shift);
+	
+	$npp = sprintf("%.*d", 3, $npp);
+	
+	my $artist = $track_hash->{artist};
+	$artist =~ s{/}{ }g;
+	
+	my $title = $track_hash->{title};
+	$title =~ s{/}{ }g;
+	
+	my $info_url_mp3 = $self->info_url . $track_hash->{storage_dir} . '/2.mp3?nc=' . rand;
+	
+	my $tx_info = $self->ua->get($info_url_mp3 => { Referer => $self->ref_url });
+	say 'ERROR GET INFO URL: ' . $tx_info->error and return undef if $tx_info->error;
+	
+	my $dom_host = $tx_info->res->dom->at('download-info regional-host') || $tx_info->res->dom->at('download-info host');
+	my $mp3_host = $dom_host->text;
+	my $mp3_s = $tx_info->res->dom->at('download-info s')->text;
+	my $mp3_ts = $tx_info->res->dom->at('download-info ts')->text;
+	
+	my $mp3_path = $tx_info->res->dom->at('download-info path')->text;
+	
+	my $test = substr($mp3_path,1)  . $mp3_s;
+	my $rpath = $self->track_path_pp($test);
+	
+	my $mp3_url = 'http://' . $mp3_host . '/get-mp3/' . $rpath . '/' . $mp3_ts  . $mp3_path . '?track-id=' . $track_hash->{id} . '&from=service-10-track-album&similarities-experiment=default';
+	
+	my $mp3_local_path = File::Spec->catfile( getcwd, $self->base_path );
+	
+	my $tmp_string;
+	
+	$tmp_string = $mp3_local_path;
+	$tmp_string = Encode::encode('cp1251', $tmp_string);
+	make_path($tmp_string) unless -d $tmp_string;
+	my $mp3_local = File::Spec->catfile($mp3_local_path, $npp.' - '. $artist . ' - ' . $title . '.mp3');
+	
+	$tmp_string = $mp3_local;
+	$tmp_string = Encode::encode('cp866', $tmp_string);
+	$mp3_local = Encode::encode('cp1251', $mp3_local);
+	say 'WORKING ON ' . $tmp_string . ' <<< ' . $mp3_url;
+	say 'SKIPPING coz exists ' . $tmp_string and return undef if -f $mp3_local;
+	
+	my $tx_mp3 = $self->ua->get($mp3_url => { Referer => $self->ref_url } );
+	say 'ERROR GET MP3: ' . $tx_mp3->error and return undef if $tx_mp3->error;
+	
+	open(my $mp3h, '>', $mp3_local);
+	binmode($mp3h);
+	print $mp3h $tx_mp3->res->body;
+	close($mp3h);
+}
+
+sub download_playlist {
+	my ($self, $playlist) = (shift, shift);
+	$playlist =~ m/^(\d*)/;
+	my $playlist_id = $1;
+	$playlist =~ m/^\d*\&(.*)$/;
+	my $playlist_owner = $1;
+	
+	my $playlist_hash = $self->playlist_tracks( $playlist_id, $playlist_owner);
+	
+	my $title = $playlist_hash->{playlists}[0]{title};
+	#$title = Encode::encode('cp1251', $title);
+	$self->base_path ($self->base_path.$playlist_owner."-".$playlist_id." (".$title.")/");
+	my $i = 0;
+	for my $track_hash (@{$playlist_hash->{tracks}}){
+		$i+=1;
+		$self->download_next_track( $track_hash , $i);
+	}
+}
 sub download_album {
 	my ($self, $album_id) = (shift, shift);
 	
@@ -466,6 +576,7 @@ use Getopt::Long;
 my $albums = "";
 my $artists = "";
 my $tracks = "";
+my $playlist = "";
 
 sub usage{
 	say "Usage:";
@@ -474,6 +585,8 @@ sub usage{
 	say "$0 --artists=IDS_LIST";
 	say "OR";
 	say "$0 --tracks=IDS_LIST";
+	say "OR";
+	say "$0 --playlist=playlist_id&owner";
 	say "OR any combinations together";
 	say "WHERE IDS_LIST comma separated integer list with one or more";
 	say "valid albums, artists or track ids from musik.yandex.ru";
@@ -484,10 +597,11 @@ sub usage{
 
 GetOptions("albums=s" => \$albums,
 			"artists=s" => \$artists,
-			"tracks=s" => \$tracks)
+			"tracks=s" => \$tracks,
+			"playlist=s" => \$playlist)
 			or usage;
 
-usage unless $albums || $artists || $tracks;
+usage unless $albums || $artists || $tracks || $playlist;
 
 my $ymd = YandexMusikDownloader->new;
 
@@ -507,7 +621,10 @@ for my $album (split /\D/, $albums){
 for my $track (split /\D/, $tracks){
 	next unless (int($track));
 	#say 'Found track id ' . $track;
-	$ymd->download_track($track);
+	$ymd->download_one_track($track);
 }
-
+if ($playlist =~ /.*\&.*/) {
+#	#say 'Found playlist ' . $playlist;
+	$ymd->download_playlist($playlist);
+}
 say '================================SCRIPT FINISHED================================';
