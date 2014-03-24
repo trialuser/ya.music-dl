@@ -1,5 +1,5 @@
 #!/usr/bin/perl -w
-package YandexMusikDownloader;
+package YaMusicDownloader;
 use Mojo::Base -base;
 use Mojo::UserAgent;
 use Mojo::JSON;
@@ -10,9 +10,16 @@ use autodie;
 use Cwd;
 use File::Spec;
 use File::Path qw/make_path/;
+use MP3::Tag;
+use Digest::MD5 qw(md5_hex);
 #use utf8;
 
 $ENV{MOJO_MAX_MESSAGE_SIZE} = 9_999_999_999;
+
+# global variables:
+my %g_STATUS_CODE = ( 'OK' => '0', 'WARNING' => '1', 'CRITICAL' => '2', 'UNKNOWN' => '3' );
+my $g_now=time;
+# # # # #
 
 has ua => sub{
 	my $ua = Mojo::UserAgent->new;
@@ -106,9 +113,17 @@ has track_url =>  sub { Mojo::URL->new('http://music.yandex.ru/external/embed-tr
 has album_tracks_url =>  'http://music.yandex.ru/fragment/album/';
 has info_url => 'http://storage.music.yandex.ru/download-info/';
 has ref_url => 'http://swf.static.yandex.net/music/service-player.swf?v=12.27.1&proxy-host=http://storage.music.yandex.ru';
-has base_path => './yandex-musik/';
-has save_path => './yandex-musik/';
+has base_path => './ya.music/';					# absolute path (like a constant, but can be changed with option --dir)
+has save_path => './ya.music/';					# where to store files (can include artist name and album name in path)
+has create_subdirectories => 1;					# create subdirectories, ie.: using artist name and album name in path
+has get_cover => 0;								# get cover from website?
+has use_cookie => 0;							# login and use cookies?
+has ya_login => "";								# yandex login
+has ya_password => "";							# yandex password
 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# print a variable with a type %hash
+# 
 sub print_hash {
 	my $href = shift;
 	while( my( $key, $val ) = each %{$href} ) {
@@ -117,6 +132,28 @@ sub print_hash {
 	print "\n";
 }
 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+#
+#
+sub strip_slashes {
+	my ($self, $data) = (shift, shift);
+	if (!$data) {
+		return "";
+	} else {
+		$data =~ s{/}{ }g;
+		return $data;
+	}
+}
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# set base_path
+#   params: $dir
+sub set_base_path {
+	my ($self, $dir) = (shift, shift);
+	if ($dir =~ /^[-\w\.\/]+$/) {
+		$self->base_path($dir);
+	}
+	return;
+}
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # get list of albums for artist 
 #  params: $artist_id
@@ -131,7 +168,7 @@ sub get_artist_albums {
 
 	return $tx->res->json;
 }
-# # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # get tracks hashes by playlist_id
 #  params: $playlist_id, $playlist_owner
 sub get_playlist_tracks {
@@ -144,7 +181,6 @@ sub get_playlist_tracks {
 	my $tx = $self->ua->get($playlist_url);
 	warn 'ERROR get get_playlist_tracks for ' . $playlist_id . ' : ' . $tx->error and return undef if $tx->error;
 	#return $tx->res->json;
-	
 	
 	my $tracks = $tx->res->json->{playlists}[0]{tracks};
 	#$title = Encode::encode('cp1251', $title);
@@ -164,7 +200,7 @@ sub get_playlist_tracks {
 	$tx->res->json->{tracks} = $tx2->res->json->{tracks};
 	return $tx->res->json;
 }
-# # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # get tracks hashes by album_id
 #  params: $album_id
 #  alternative url: http://music.yandex.ru/get/album_info.jsx?id=0
@@ -194,7 +230,7 @@ sub get_album_tracks {
 	
 	return $res;
 }
-# # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # get track hash by track_id
 #  params: $track_id
 sub get_track {
@@ -212,8 +248,6 @@ sub get_track {
 	# $track_hash->{'album'} = $tx->res->dom->at('album')->at('title')->text;
 	# $track_hash->{'storage_dir'} = $tx->res->dom->at('track')->attr('storage-dir');
 	
-	
-	
 	my $playlist_url_tracks = $self->playlist_url_tracks->clone;
 	$playlist_url_tracks->query->param( tracks => $track_id);
 	my $tx2 = $self->ua->get($playlist_url_tracks);
@@ -224,7 +258,11 @@ sub get_track {
 	
 	#return $track_hash;
 }
-# # # # # # # # # # 
+sub update_id3tag {
+	
+	return
+}
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # Dowload and save track with path: <Artist>/<Date>-<Album>/<Num>-<Track>
 #  params: $track_hash
 sub save_track {
@@ -232,15 +270,13 @@ sub save_track {
 	
 	my $artist = $track_hash->{artist};
 	$artist =~ s{/}{ }g;
-	
 	my $title = $track_hash->{title};
 	$title =~ s{/}{ }g;
-	
-	#utf8::encode($artist);
-	#utf8::encode($title);
+	my $album = $track_hash->{album};
+	$album =~ s{/}{ }g;
+	my $cover = $track_hash->{cover};
 	
 	my $info_url_mp3 = $self->info_url . $track_hash->{storage_dir} . '/2.mp3?nc=' . rand;
-	
 	my $tx_info = $self->ua->get($info_url_mp3 => { Referer => $self->ref_url });
 	say 'ERROR GET INFO URL: ' . $tx_info->error and return undef if $tx_info->error;
 	
@@ -252,25 +288,30 @@ sub save_track {
 	my $mp3_path = $tx_info->res->dom->at('download-info path')->text;
 	
 	my $ya_hash = substr($mp3_path,1) . $mp3_s;
-	my $rpath = $self->track_path_pp($ya_hash);
+	my $rpath = $self->ya_get_hash($ya_hash);
 	
 	my $mp3_url = 'http://' . $mp3_host . '/get-mp3/' . $rpath . '/' . $mp3_ts  . $mp3_path . '?track-id=' . $track_hash->{id} . '&from=service-10-track-album&similarities-experiment=default';
 	
 	
-	#my $mp3_local_path = File::Spec->catfile( getcwd, $self->base_path , $artist ,  $track_hash->{album});
-	my $mp3_local_path = File::Spec->catfile( getcwd, $self->save_path );
-	my $mp3_local = File::Spec->catfile($mp3_local_path, $artist . ' - ' . $title . '.mp3');
+	my $mp3_local_path;
+	if ($self->create_subdirectories) {
+		$mp3_local_path = File::Spec->catfile( getcwd, $self->save_path );
+	} else {
+		$mp3_local_path = File::Spec->catfile( getcwd, $self->base_path );
+	}
+	if ($mp3_local_path =~ /\.{1,}$/) {
+		$mp3_local_path =~ s/\.{1,}$//g;
+	}
 	
-	my $tmp_string;
-	$tmp_string = $mp3_local_path;
-	$tmp_string = Encode::encode('cp1251', $tmp_string);
+	my $tmp_string = Encode::encode('cp1251', $mp3_local_path);
 	make_path($tmp_string) unless -d $tmp_string;
+	my $mp3_local = File::Spec->catfile($mp3_local_path, $artist . ' - ' . $title . '.mp3');
 	
 	$tmp_string = $mp3_local;
 	$tmp_string = Encode::encode('cp866', $tmp_string);
 	$mp3_local = Encode::encode('cp1251', $mp3_local);
-	say 'WORKING ON ' . $tmp_string . ' <<< ' . $mp3_url;
-	say 'SKIPPING coz exists ' . $tmp_string and return undef if -f $mp3_local;
+	say 'Getting file ' . $tmp_string . ' <<< ' . $mp3_url;
+	say 'File already exists: ' . $tmp_string and return undef if -f $mp3_local;
 	
 	my $tx_mp3 = $self->ua->get($mp3_url => { Referer => $self->ref_url } );
 	say 'ERROR GET MP3: ' . $tx_mp3->error and return undef if $tx_mp3->error;
@@ -279,8 +320,35 @@ sub save_track {
 	binmode($mp3h);
 	print $mp3h $tx_mp3->res->body;
 	close($mp3h);
+	
+	# update id3 tags
+	my $mp3_cover;
+	my $if_mp3_cover = 0;
+		# get cover from website
+	if ($cover =~ /\.30x30\.(jpg|gif|png)$/i && $self->get_cover) { 
+		$cover =~ s/\.30x30\./\.460x460\./g;
+		$mp3_cover = $self->ua->get($cover => { Referer => $self->ref_url } );
+		if ($mp3_cover->error) {
+			$if_mp3_cover = 0;
+		} else {
+			$if_mp3_cover = 1;
+			$mp3_cover = $mp3_cover->res->body;
+		}
+	}
+	my $mp3 = MP3::Tag->new($mp3_local);
+	$mp3->get_tags();
+	$mp3->{ID3v2}->remove_tag() if exists $mp3->{ID3v2};
+	my $id3v2 = $mp3->new_tag("ID3v2");
+	$id3v2->add_frame("TALB", $album);			# album
+	$id3v2->add_frame("TPE1", $artist);			# artist
+	$id3v2->add_frame("TIT2", $title);			# title
+	if ($if_mp3_cover) {
+		$id3v2->add_frame("APIC", 0, 'image/jpg', chr(0x0), 'Cover (front)', $mp3_cover);
+	}
+	$id3v2->write_tag;
+	$mp3->close();
 }
-# # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # Dowload and save track for playlist with path: <PlaylistOwner>/<PlaylistID>-<PlaylistName>/<Num>-<Artist>-<Title>
 #  params: $track_hash, $num
 sub save_track_playlist {
@@ -292,6 +360,9 @@ sub save_track_playlist {
 	$artist =~ s{/}{ }g;
 	my $title = $track_hash->{title};
 	$title =~ s{/}{ }g;
+	my $album = $track_hash->{album};
+	$album =~ s{/}{ }g;
+	my $cover = $track_hash->{cover};
 	
 	my $info_url_mp3 = $self->info_url . $track_hash->{storage_dir} . '/2.mp3?nc=' . rand;
 	my $tx_info = $self->ua->get($info_url_mp3 => { Referer => $self->ref_url });
@@ -305,13 +376,20 @@ sub save_track_playlist {
 	my $mp3_path = $tx_info->res->dom->at('download-info path')->text;
 	
 	my $ya_hash = substr($mp3_path,1) . $mp3_s;
-	my $rpath = $self->track_path_pp($ya_hash);
+	my $rpath = $self->ya_get_hash($ya_hash);
 	
 	my $mp3_url = 'http://' . $mp3_host . '/get-mp3/' . $rpath . '/' . $mp3_ts  . $mp3_path . '?track-id=' . $track_hash->{id} . '&from=service-10-track-album&similarities-experiment=default';
 	
+	my $mp3_local_path;
+	if ($self->create_subdirectories) {
+		$mp3_local_path = File::Spec->catfile( getcwd, $self->save_path );
+	} else {
+		$mp3_local_path = File::Spec->catfile( getcwd, $self->base_path );
+	}
+	if ($mp3_local_path =~ /\.{1,}$/) {
+		$mp3_local_path =~ s/\.{1,}$//g;
+	}
 	my $tmp_string;
-	my $mp3_local_path = File::Spec->catfile( getcwd, $self->save_path );
-	
 	$tmp_string = $mp3_local_path;
 	$tmp_string = Encode::encode('cp1251', $tmp_string);
 	make_path($tmp_string) unless -d $tmp_string;
@@ -320,9 +398,15 @@ sub save_track_playlist {
 	$tmp_string = $mp3_local;
 	$tmp_string = Encode::encode('cp866', $tmp_string);
 	$mp3_local = Encode::encode('cp1251', $mp3_local);
-	$mp3_local =~ s/\?/_/;
-	say 'WORKING ON ' . $tmp_string . ' <<< ' . $mp3_url;
-	say 'SKIPPING coz exists ' . $tmp_string and return undef if -f $mp3_local;
+	$mp3_local =~ s/\?/_/g;
+	
+	open( FILE, ">>" . "log.txt" )
+		or die "\nCan't open file for writing: $!";
+	printf FILE ( "file: %s\n", $mp3_local );
+	close(FILE);
+	
+	say 'Getting file ' . $tmp_string . ' <<< ' . $mp3_url;
+	say 'File already exists: ' . $tmp_string and return undef if -f $mp3_local;
 	
 	my $tx_mp3 = $self->ua->get($mp3_url => { Referer => $self->ref_url } );
 	say 'ERROR GET MP3: ' . $tx_mp3->error and return undef if $tx_mp3->error;
@@ -331,8 +415,35 @@ sub save_track_playlist {
 	binmode($mp3h);
 	print $mp3h $tx_mp3->res->body;
 	close($mp3h);
+	
+	# update id3 tags
+	my $mp3_cover;
+	my $if_mp3_cover = 0;
+		# get cover from website
+	if ($cover =~ /\.30x30\.(jpg|gif|png)$/i && $self->get_cover) { 
+		$cover =~ s/\.30x30\./\.460x460\./g;
+		$mp3_cover = $self->ua->get($cover => { Referer => $self->ref_url } );
+		if ($mp3_cover->error) {
+			$if_mp3_cover = 0;
+		} else {
+			$if_mp3_cover = 1;
+			$mp3_cover = $mp3_cover->res->body;
+		}
+	}
+	my $mp3 = MP3::Tag->new($mp3_local);
+	$mp3->get_tags();
+	$mp3->{ID3v2}->remove_tag() if exists $mp3->{ID3v2};
+	my $id3v2 = $mp3->new_tag("ID3v2");
+	$id3v2->add_frame("TALB", $album);			# album
+	$id3v2->add_frame("TPE1", $artist);			# artist
+	$id3v2->add_frame("TIT2", $title);			# title
+	if ($if_mp3_cover) {
+		$id3v2->add_frame("APIC", 0, 'image/jpg', chr(0x0), 'Cover (front)', $mp3_cover);
+	}
+	$id3v2->write_tag;
+	$mp3->close();
 }
-# # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # download full playlist by playlist_id and playlist_owner
 #  params: $playlist (format: "playlist_id&owner")
 #  <PlaylistOwner>/<PlaylistID>-<PlaylistName>/<Num>-<Artist>-<Title>
@@ -346,8 +457,9 @@ sub download_playlist {
 	my $playlist_hash = $self->get_playlist_tracks( $playlist_id, $playlist_owner);
 	
 	my $title = $playlist_hash->{playlists}[0]{title};
-#	#$title = Encode::encode('cp1251', $title);
-	$self->save_path($self->base_path."@".$playlist_owner."/".$playlist_id." - ".$title."/");
+	#$title = Encode::encode('cp1251', $title);
+	# hierarchy: "base_dir/@playlist_owner/id - title/id - artist - track.mp3"
+	$self->save_path($self->base_path."@".$playlist_owner."/".$playlist_id." - ".$self->strip_slashes($title)."/");
 	my $i = 0;
 	for my $track_hash (@{$playlist_hash->{tracks}}){
 		$i+=1;
@@ -355,10 +467,10 @@ sub download_playlist {
 		#print_hash($track_hash);
 	}
 }
-# # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # download full album by album_id
 #  params: $album_id
-#  <Artist>/<Album>/<Num>-<Track>
+#  <Artist>/<Album>/<Artist - Track>
 sub download_album {
 	my ($self, $album_id) = (shift, shift);
 	
@@ -367,18 +479,18 @@ sub download_album {
 	for my $track_hash (@{$album_hash->{tracks}}){
 		if ($i == 0) { 
 			my $artist = $track_hash->{artist};
-			$artist =~ s{/}{ }g;
-			$self->save_path($self->base_path ."". $artist ."/". $track_hash->{album} ."/"); 
+			# hierarchy: "base_dir/artist/album/artist - track.mp3"
+			$self->save_path($self->base_path ."". $self->strip_slashes($artist) ."/". $self->strip_slashes($track_hash->{album}) ."/"); 
 		}
 		$i+=1;
 		#print_hash($track_hash);
 		$self->save_track( $track_hash );
 	}
 }
-# # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # download a one track by track_id
 #  params: $track_id
-#  <Artist>/<Album>/<Track>
+#  <Artist>/<Album>/<Artist - Track>
 sub download_track {
 	my ($self, $track_id) = (shift, shift);
 	my $track_hashs = $self->get_track($track_id);
@@ -386,15 +498,15 @@ sub download_track {
 	for my $track_hash (@{$track_hashs->{tracks}}){
 		if ($i == 0) { 
 			my $artist = $track_hash->{artist};
-			$artist =~ s{/}{ }g;
-			$self->save_path($self->base_path ."". $artist ."/". $track_hash->{album} ."/"); 
+			# hierarchy: "base_dir/artist/album/artist - track.mp3"
+			$self->save_path($self->base_path ."". $self->strip_slashes($artist) ."/". $self->strip_slashes($track_hash->{album}) ."/"); 
 		}
 		$i+=1;
 		#print_hash($track_hash);
 		$self->save_track( $track_hash );
 	}
 }
-# # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # download all albums of artist by artist_id
 #  params: $artist_id
 sub download_artist {
@@ -406,128 +518,17 @@ sub download_artist {
 		$self->download_album($album_id);
 	}
 }
-# # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # Yandex Helper: crypto functions from Yandex
 #  URL to source JS library: http://music.yandex.ru/index.min.js?build=14.01.04fix02
-sub track_path_pp{
-		my $self = shift;
-		my $str = shift;
-				
-		sub to32{ unpack('i', pack('i', shift)); }
-        sub M_js {
-			my ($c1, $b1) = (shift, shift);
-            return to32( to32($c1 << $b1) | to32( ($c1 & 0xffffffff) >> (32 - $b1))); #>>>
-        }
-
-        sub L_js {
-			my ($x, $c) = (shift, shift || 0);
-            my ($G, $b1, $k, $F, $d);
-            $k = to32($x & 2147483648);
-            $F = to32($c & 2147483648);
-            $G = to32($x & 1073741824);
-            $b1 =to32($c & 1073741824);
-            $d = to32($x & 1073741823) + to32($c & 1073741823);
-            if ( to32($G & $b1)) {
-                return to32($d ^ 2147483648 ^ $k ^ $F);
-            }
-            if ($G | $b1) {
-                if (to32($d & 1073741824)) {
-                    return to32($d ^ 3221225472 ^ $k ^ $F);
-                } else {
-                    return to32($d ^ 1073741824 ^ $k ^ $F);
-                }
-            } else {
-                return to32($d ^ $k ^ $F);
-            }
-        }
-
-        sub r_js{
-			my ($b1, $d, $c) = (shift, shift, shift);
-            return to32( to32($b1 & $d) | to32(to32(~$b1) & $c) );
-        }
-
-        sub q_js {
-			my ($b1, $d, $c) = (shift, shift, shift);
-            return to32($b1 & $c) | to32($d & to32(~$c));
-        }
-
-        sub p_js{
-			my ($b1, $d, $c) = (shift, shift, shift);
-            return to32($b1 ^ $d ^ $c);
-        }
-
-        sub n_js {
-			my ($b1, $d, $c) = (shift, shift, shift);
-            return to32($d ^ to32($b1 | to32(~$c)));
-        }
-
-        sub u_js {
-			my ($G, $F, $ab, $aa, $k, $H, $I) = (shift, shift, shift, shift, shift, shift, shift);
-            $G = L_js($G, L_js(L_js(r_js($F, $ab, $aa), $k), $I));
-            return L_js(M_js($G, $H), $F);
-        }
-
-        sub f_js {
-			my ($G, $F, $ab, $aa, $k, $H, $I) = (shift, shift, shift, shift, shift, shift, shift);
-            $G = L_js($G, L_js(L_js(q_js($F, $ab, $aa), $k), $I));            
-            return L_js(M_js($G, $H), $F);
-        }
-
-        sub E_js{
-			my ($G, $F, $ab, $aa, $k, $H, $I) = (shift, shift, shift, shift, shift, shift, shift);
-            $G = L_js($G, L_js(L_js(p_js($F, $ab, $aa), $k), $I));            
-            return L_js(M_js($G, $H), $F);
-        }
-
-        sub t_js{
-			my ($G, $F, $ab, $aa, $k, $H, $I) = (shift, shift, shift, shift, shift, shift, shift);
-            $G = L_js($G, L_js(L_js(n_js($F, $ab, $aa), $k), $I));
-            return L_js(M_js($G, $H), $F);
-        }
-
-        sub e_js{
-			my $x = shift;
-            my $H;
-            my $k = length($x);
-            my $d = $k + 8;
-            my $c = ($d - ($d % 64)) / 64;
-            my $G = ($c + 1) * 16;
-            my $I = []; $I->[$_]=0 for((0 .. $G-1));
-            
-            my $b = 0;
-            my $F = 0;
-            my $b1;
-            while ($F < $k) {
-                $H = ($F - ($F % 4)) / 4;
-                $b1 = ($F % 4) * 8;
-                $I->[$H] = to32($I->[$H] | (ord(substr($x,$F,1)) << $b1));
-                $F++;
-            }
-            $H = ($F - ($F % 4)) / 4;
-            $b1 = ($F % 4) * 8;
-            $I->[$H] = to32($I->[$H] | to32(128 << $b1));
-            $I->[$G - 2] = to32($k << 3);
-            $I->[$G - 1] = to32( ($k & 0xffffffff) >> 29); #>>>
-            return $I;
-        }
-
-        sub C_js {
-            my ($d, $c) = (shift,"");
-            my $k = "",
-            my ($x, $b1);
-            for ($b1 = 0; $b1 <= 3; $b1++) {
-                $x = to32(to32(( $d & 0xffffffff) >> ($b1 * 8)) & 255); #>>>
-                $k = sprintf('%02x', $x);
-                $k = substr($k, length($k)-2, 2);
-                $c = $c . $k;
-            }
-            return $c;
-        }
-
+sub ya_get_hash{
+        my $self = shift;
+        my $str = shift;
+        sub to32{ unpack('i', pack('i', shift)); }
         sub K_js {
-			my $d = shift||'';
-			$d =~ s/\r\n/\n/g;
-            $d = chr(498608 / 5666) . chr(39523855 / 556674) . chr(47450778 / 578668) . chr(82156899 / 760712) . chr(5026300 / 76156) . chr(26011178 / 298979) . chr(28319886 / 496840) . chr(23477867 / 335398) . chr(21650560 / 246029) . chr(22521465 / 208532) . chr(16067393 / 159083) . chr(94458862 / 882793) . chr(67654429 / 656839) . chr(82331283 / 840115) . chr(11508494 / 143856) . chr(30221073 / 265097) . chr(18712908 / 228206) . chr(21423113 / 297543) . chr(65168784 / 556998) . chr(48924535 / 589452) . chr(61018985 / 581133) . chr(10644616 / 163763) . $d;
+            my $d = shift||'';
+            $d =~ s/\r\n/\n/g;
+            $d = chr(498608/5666).chr(39523855/556674).chr(47450778/578668).chr(82156899/760712).chr(5026300/76156).chr(26011178/298979).chr(28319886/496840).chr(23477867/335398).chr(21650560/246029).chr(22521465/208532).chr(16067393/159083).chr(94458862/882793).chr(67654429/656839).chr(82331283/840115).chr(11508494/143856).chr(30221073/265097).chr(18712908/228206).chr(21423113/297543).chr(65168784/556998).chr(48924535/589452).chr(61018985/581133).chr(10644616/163763).$d;
             my $b1 = "";
             for (my $x = 0; $x < length($d); $x++) {
                 my $k = ord substr($d, $x,1);
@@ -544,110 +545,11 @@ sub track_path_pp{
                     }
                 }
             }
+            $b1 = md5_hex($b1);
+            $b1 =~ tr/A-Z/a-z/;
             return $b1;
         }
-        my $D = [];
-        my ($Q, $h, $J, $v, $g, $Z, $Y, $X, $W);
-        my $T = 7;
-        my $R = 12;
-        my $O = 17;
-        my $N = 22;
-        my $B = 5;
-        my $A = 9;
-        my $y = 14;
-        my $w = 20;
-        my $o = 4;
-        my $m = 11;
-        my $l = 16;
-        my $j = 23;
-        my $V = 6;
-        my $U = 10;
-        my $S = 15;
-        my $P = 21;
-       
         $str = K_js($str);
-        $D = e_js($str);
-        $Z = 1732584193;
-        $Y = 4023233417;
-        $X = 2562383102;
-        $W = 271733878;
-
-        for ($Q = 0; $Q < scalar(@{$D}); $Q += 16) {
-            $h = $Z;
-            $J = $Y;
-            $v = $X;
-            $g = $W;
-            $Z = u_js($Z, $Y, $X, $W, $D->[$Q + 0], $T, 3614090360);
-            $W = u_js($W, $Z, $Y, $X, $D->[$Q + 1], $R, 3905402710);
-            $X = u_js($X, $W, $Z, $Y, $D->[$Q + 2], $O, 606105819);
-            $Y = u_js($Y, $X, $W, $Z, $D->[$Q + 3], $N, 3250441966);
-            $Z = u_js($Z, $Y, $X, $W, $D->[$Q + 4], $T, 4118548399);
-            $W = u_js($W, $Z, $Y, $X, $D->[$Q + 5], $R, 1200080426);
-            $X = u_js($X, $W, $Z, $Y, $D->[$Q + 6], $O, 2821735955);
-            $Y = u_js($Y, $X, $W, $Z, $D->[$Q + 7], $N, 4249261313);
-            $Z = u_js($Z, $Y, $X, $W, $D->[$Q + 8], $T, 1770035416);
-            $W = u_js($W, $Z, $Y, $X, $D->[$Q + 9], $R, 2336552879);
-            $X = u_js($X, $W, $Z, $Y, $D->[$Q + 10], $O, 4294925233);
-            $Y = u_js($Y, $X, $W, $Z, $D->[$Q + 11], $N, 2304563134);
-            $Z = u_js($Z, $Y, $X, $W, $D->[$Q + 12], $T, 1804603682);
-            $W = u_js($W, $Z, $Y, $X, $D->[$Q + 13], $R, 4254626195);
-            $X = u_js($X, $W, $Z, $Y, $D->[$Q + 14], $O, 2792965006);
-            $Y = u_js($Y, $X, $W, $Z, $D->[$Q + 15], $N, 1236535329);
-            $Z = f_js($Z, $Y, $X, $W, $D->[$Q + 1], $B, 4129170786);
-            $W = f_js($W, $Z, $Y, $X, $D->[$Q + 6], $A, 3225465664);
-            $X = f_js($X, $W, $Z, $Y, $D->[$Q + 11], $y, 643717713);
-            $Y = f_js($Y, $X, $W, $Z, $D->[$Q + 0], $w, 3921069994);
-            $Z = f_js($Z, $Y, $X, $W, $D->[$Q + 5], $B, 3593408605);
-            $W = f_js($W, $Z, $Y, $X, $D->[$Q + 10], $A, 38016083);
-            $X = f_js($X, $W, $Z, $Y, $D->[$Q + 15], $y, 3634488961);
-            $Y = f_js($Y, $X, $W, $Z, $D->[$Q + 4], $w, 3889429448);
-            $Z = f_js($Z, $Y, $X, $W, $D->[$Q + 9], $B, 568446438);
-            $W = f_js($W, $Z, $Y, $X, $D->[$Q + 14], $A, 3275163606);
-            $X = f_js($X, $W, $Z, $Y, $D->[$Q + 3], $y, 4107603335);
-            $Y = f_js($Y, $X, $W, $Z, $D->[$Q + 8], $w, 1163531501);
-            $Z = f_js($Z, $Y, $X, $W, $D->[$Q + 13], $B, 2850285829);
-            $W = f_js($W, $Z, $Y, $X, $D->[$Q + 2], $A, 4243563512);
-            $X = f_js($X, $W, $Z, $Y, $D->[$Q + 7], $y, 1735328473);
-            $Y = f_js($Y, $X, $W, $Z, $D->[$Q + 12], $w, 2368359562);
-            $Z = E_js($Z, $Y, $X, $W, $D->[$Q + 5], $o, 4294588738);
-            $W = E_js($W, $Z, $Y, $X, $D->[$Q + 8], $m, 2272392833);
-            $X = E_js($X, $W, $Z, $Y, $D->[$Q + 11], $l, 1839030562);
-            $Y = E_js($Y, $X, $W, $Z, $D->[$Q + 14], $j, 4259657740);
-            $Z = E_js($Z, $Y, $X, $W, $D->[$Q + 1], $o, 2763975236);
-            $W = E_js($W, $Z, $Y, $X, $D->[$Q + 4], $m, 1272893353);
-            $X = E_js($X, $W, $Z, $Y, $D->[$Q + 7], $l, 4139469664);
-            $Y = E_js($Y, $X, $W, $Z, $D->[$Q + 10], $j, 3200236656);
-            $Z = E_js($Z, $Y, $X, $W, $D->[$Q + 13], $o, 681279174);
-            $W = E_js($W, $Z, $Y, $X, $D->[$Q + 0], $m, 3936430074);
-            $X = E_js($X, $W, $Z, $Y, $D->[$Q + 3], $l, 3572445317);
-            $Y = E_js($Y, $X, $W, $Z, $D->[$Q + 6], $j, 76029189);
-            $Z = E_js($Z, $Y, $X, $W, $D->[$Q + 9], $o, 3654602809);
-            $W = E_js($W, $Z, $Y, $X, $D->[$Q + 12], $m, 3873151461);
-            $X = E_js($X, $W, $Z, $Y, $D->[$Q + 15], $l, 530742520);
-            $Y = E_js($Y, $X, $W, $Z, $D->[$Q + 2], $j, 3299628645);
-            $Z = t_js($Z, $Y, $X, $W, $D->[$Q + 0], $V, 4096336452);
-            $W = t_js($W, $Z, $Y, $X, $D->[$Q + 7], $U, 1126891415);
-            $X = t_js($X, $W, $Z, $Y, $D->[$Q + 14], $S, 2878612391);
-            $Y = t_js($Y, $X, $W, $Z, $D->[$Q + 5], $P, 4237533241);
-            $Z = t_js($Z, $Y, $X, $W, $D->[$Q + 12], $V, 1700485571);
-            $W = t_js($W, $Z, $Y, $X, $D->[$Q + 3], $U, 2399980690);
-            $X = t_js($X, $W, $Z, $Y, $D->[$Q + 10], $S, 4293915773);
-            $Y = t_js($Y, $X, $W, $Z, $D->[$Q + 1], $P, 2240044497);
-            $Z = t_js($Z, $Y, $X, $W, $D->[$Q + 8], $V, 1873313359);
-            $W = t_js($W, $Z, $Y, $X, $D->[$Q + 15], $U, 4264355552);
-            $X = t_js($X, $W, $Z, $Y, $D->[$Q + 6], $S, 2734768916);
-            $Y = t_js($Y, $X, $W, $Z, $D->[$Q + 13], $P, 1309151649);
-            $Z = t_js($Z, $Y, $X, $W, $D->[$Q + 4], $V, 4149444226);
-            $W = t_js($W, $Z, $Y, $X, $D->[$Q + 11], $U, 3174756917);
-            $X = t_js($X, $W, $Z, $Y, $D->[$Q + 2], $S, 718787259);
-            $Y = t_js($Y, $X, $W, $Z, $D->[$Q + 9], $P, 3951481745);
-            $Z = L_js($Z, $h);
-            $Y = L_js($Y, $J);
-            $X = L_js($X, $v);
-            $W = L_js($W, $g);            
-        }
-        my $i = C_js($Z) . C_js($Y) . C_js($X) . C_js($W);
-        return  lc $i;
 }
 1;
 ########################################################################
@@ -659,33 +561,63 @@ my $albums = "";
 my $artists = "";
 my $tracks = "";
 my $playlist = "";
+my $directory = "";
+my $no_subdirectories = 0;
+my $get_cover = 0;
+my $force_album = "";
 
-sub usage{
-	say "Usage:";
-	say "$0 --albums=IDS_LIST";
-	say "OR";
-	say "$0 --artists=IDS_LIST";
-	say "OR";
-	say "$0 --tracks=IDS_LIST";
-	say "OR";
-	say "$0 --playlist=playlist_id&owner";
-	say "OR any combinations together";
-	say "WHERE IDS_LIST comma separated integer list with one or more";
-	say "valid albums, artists or track ids from musik.yandex.ru";
-	say "";
-	say "After script finished see result in ./yandex-musik/";
-	exit(0);
+sub print_usage{
+	print <<EOH;
+   Usage: $0 [command] [options]
+   
+   Commands:
+    --albums=IDS_LIST
+        - download all tracks from album by album_ID (comma separated)
+    --artists=IDS_LIST
+        - download all albums by artist_ID (comma separated)
+    --tracks=IDS_LIST
+        - download tracks by tracks_ID (comma separated)
+    --playlist=playlist_id&owner
+        - download playlist by playlist_id and owner_name
+    
+    Options:
+    -c or --cover 
+        - get cover for each track from Yandex.Music and add it as ID3v2 tag
+    --dir=DIRECTORY
+        - set output directory. Default value: ./ya.music/
+    -ns or --no_subdirectories
+        - do not create subdirectories (ie. "artist/album/atrist - track"), save
+        only to output directory (see option --dir)
+    --help
+        - print this help
+
+    Samples:
+        $0 --albums=295708,295709,295710 -c --dir=./
+        $0 --artists=3120,79215 --cover
+        $0 --tracks=2749751,2295002,1710808,1710811,1710816,2295010,2758009 -c -ns --dir="./Queen/favorites/" 
+        $0 --playlist="1008&ya-playlist"
+EOH
+	exit $g_STATUS_CODE{"OK"};
 }
 
-GetOptions("albums=s" => \$albums,
-			"artists=s" => \$artists,
-			"tracks=s" => \$tracks,
-			"playlist=s" => \$playlist)
-			or usage;
+GetOptions(
+	"albums=s"    => \$albums,
+	"artists=s"  => \$artists,
+	"tracks=s"   => \$tracks,
+	"playlist=s" => \$playlist,
+	"dir=s",     => \$directory,
+	"c|cover"    => \$get_cover,
+	"ns|no_subdirectories" => \$no_subdirectories,
+	"fa|force_album"       => \$force_album,
+) or print_usage;
 
-usage unless $albums || $artists || $tracks || $playlist;
+print_usage unless $albums || $artists || $tracks || $playlist;
 
-my $ymd = YandexMusikDownloader->new;
+my $ymd = YaMusicDownloader->new;
+# update options
+$ymd->set_base_path($directory);
+$ymd->create_subdirectories(0) if $no_subdirectories == 1;
+$ymd->get_cover(1) if $get_cover == 1;
 
 no warnings 'numeric';
 for my $artist (split /\D/, $artists){
@@ -709,4 +641,3 @@ if ($playlist =~ /.*\&.*/) {
 #	#say 'Found playlist ' . $playlist;
 	$ymd->download_playlist($playlist);
 }
-say '================================SCRIPT FINISHED================================';
