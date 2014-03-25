@@ -1,7 +1,7 @@
 Downloader for Yandex.Music
 =============
 
-It allows to download tracks, playlists, albums from the online-service http://Music.Yandex.ru/
+It allows to download tracks, playlists, albums from the online-service http://music.yandex.ru/
 
 * Author: Vitali Patonia
 * E-mail: patonia.vl@gmail.com
