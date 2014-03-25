@@ -1,16 +1,16 @@
 Downloader for Yandex.Music
 =============
 
-####### Author: Vitali Patonia 
-####### E-mail: patonia.vl@gmail.com
-
+Author: Vitali Patonia 
+E-mail: patonia.vl@gmail.com
 
 Installation:
 -------
 
-`cpan install IO::Socket::SSL`
-`cpan install Mojo`
-`cpan install MP3::Tag`
+    cpan install IO::Socket::SSL
+    cpan install Mojo
+    cpan install MP3::Tag
+
 
 Usage
 -------
