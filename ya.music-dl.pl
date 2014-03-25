@@ -1,4 +1,8 @@
 #!/usr/bin/perl -w
+########################################
+# Author: Vitali Patonia 
+# E-mail: patonia.vl@gmail.com
+########################################
 package YaMusicDownloader;
 use Mojo::Base -base;
 use Mojo::UserAgent;
@@ -111,7 +115,6 @@ has json => sub { Mojo::JSON->new };
 has ya_auth_url => 'http://passport.yandex.ru/passport?mode=embeddedauth&from=music&retpath=http%3A%2F%2Fmusic.yandex.ru%2Fxml%2Flogin-status.xml';
 has artist_albums_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/artist_albums_list.xml?artist=0'); };
 has playlist_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own'); };
-#has playlist_url =>  'http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own';
 has playlist_url_tracks =>  sub { Mojo::URL->new('http://music.yandex.ru/get/tracks.xml?tracks=0'); };
 has track_url =>  sub { Mojo::URL->new('http://music.yandex.ru/external/embed-track.xml?track-id=0'); };
 has album_tracks_url =>  'http://music.yandex.ru/fragment/album/';
@@ -205,27 +208,11 @@ sub yandex_login {
 		twoweeks => "yes",
 		timestamp => $TS});
 	if (my $res = $tx->success) { 
-		# body:
-		#print "body:". $res->body."\n";
-		
-		# headers:
-		#my $headers = $res->headers;
-		#for my $header ($headers->header('Set-Cookie')) {
-		#	say 'Set-Cookie:';
-		#	say for @$header;
-		#}
-		
-		# cookies:
-		#my $jar = Mojo::UserAgent::CookieJar->new;
-		#$jar->extract($tx);
-		#for my $cookie ($jar->all) {
-		#	print $cookie->name.": ". $cookie->value;
-		#}
+		#
 	} else {
 		my ($err, $code) = $tx->error;
 		say $code ? "$code response: $err" : "Connection error: $err";
 	}
-#ya_auth_url;
 }
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # set base_path
@@ -257,7 +244,6 @@ sub playlist_start {
 	$t_filename = File::Spec->catfile($self->base_path, $playlistname.'.'. $g_playlist_formats{ $self->out_playlist_type });
 	$self->out_playlist_file_name_full($t_filename);
 	$t_filename = Encode::encode($self->encoding_filesystem, $t_filename);
-	#if (-f $t_filename);
 	
 	open( $f, ">" . $t_filename ) or die "\nCan't open file for writing: $!";
 	$self->out_playlist_file ($f);
@@ -392,14 +378,11 @@ sub get_playlist_tracks {
 	
 	my $tx = $self->ua->build_tx(GET => $playlist_url->to_string);
 	$tx->req->headers->accept('*/*');
-	#$tx->req->cookies({yandex_login => 'login'});
 	$tx = $self->ua->start($tx);
 	
 	warn 'ERROR get get_playlist_tracks for ' . $playlist_id . ' : ' . $tx->error and return undef if $tx->error;
-	#print $tx->res->body."\n";
 	
 	my $tracks = $tx->res->json->{playlists}[0]{tracks};
-	#$title = Encode::encode('cp1251', $title);
 	my $i = 0;
 	my $tracks_url="";
 	for my $track_id (@{$tracks}){
@@ -452,27 +435,11 @@ sub get_album_tracks {
 sub get_track {
 	my ($self, $track_id) = (shift, shift);
 	
-	# my $track_url = $self->track_url->clone;
-	# $track_url->query->param( 'track-id' => $track_id);
-	# my $tx = $self->ua->get($track_url);
-	# warn 'ERROR get get_track for ' . $track_id . ' : ' . $tx->error and return undef if $tx->error;
-	# my $dom = $tx->res->dom;
-	# my $track_hash;
-	# $track_hash->{'title'} = $tx->res->dom->at('title')->text;
-	# $track_hash->{'id'} = $tx->res->dom->at('track')->attr('id');
-	# $track_hash->{'artist'} = $tx->res->dom->at('artist')->at('name')->text;
-	# $track_hash->{'album'} = $tx->res->dom->at('album')->at('title')->text;
-	# $track_hash->{'storage_dir'} = $tx->res->dom->at('track')->attr('storage-dir');
-	
 	my $playlist_url_tracks = $self->playlist_url_tracks->clone;
 	$playlist_url_tracks->query->param( tracks => $track_id);
 	my $tx2 = $self->ua->get($playlist_url_tracks);
 	warn 'ERROR get get_playlist_tracks for track_id: ' . $track_id . ' : ' . $tx2->error and return undef if $tx2->error;
-	#$tx->res->json->{tracks} = $tx2->res->json->{tracks};
 	return $tx2->res->json;
-	
-	
-	#return $track_hash;
 }
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # generate direct link to mp3-file at Yandex.Music
@@ -615,7 +582,6 @@ sub save_track {
 		if (-f $mp3_local) {
 			$self->playlist_add($mp3_local, $artist." - ". $title);
 			say "Updating tag for the file: ".$tmp_string;
-			#say "  tags: ".$album.", ".$artist.", ".$title.", ".$cover;
 			$self->update_id3tag($mp3_local, $album, $artist, $title, $cover);
 		} else {
 			say 'File does not exist: ' . $tmp_string;
@@ -637,7 +603,6 @@ sub download_playlist {
 	my $playlist_hash = $self->get_playlist_tracks( $playlist_id, $playlist_owner);
 	
 	my $title = $playlist_hash->{playlists}[0]{title};
-	#$title = Encode::encode('cp1251', $title);
 	# hierarchy: "base_dir/@playlist_owner/id - title/id - artist - track.mp3"
 	$self->save_path($self->base_path."@".$playlist_owner."/".$playlist_id." - ".$self->strip_slashes($title)."/");
 	my $i = 0;
