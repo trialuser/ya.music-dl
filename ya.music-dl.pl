@@ -122,8 +122,8 @@ has save_path => './ya.music/';					# where to store files (can include artist n
 has create_subdirectories => 1;					# create subdirectories, ie.: using artist name and album name in path
 has get_cover => 0;								# get cover from website?
 has use_cookie => 0;							# login and use cookies?
-has ya_login => "login";						# yandex login
-has ya_password => "password";				# yandex password
+has ya_login => "";								# yandex login
+has ya_password => "";							# yandex password
 has encoding_console => "cp866";				# 
 has encoding_filesystem => "cp1251";			# 
 has proxy_url => "http://127.0.0.1:8086";		# proxy url
@@ -790,6 +790,7 @@ sub print_usage{
         $0 --tracks=2749751,2295002,1710808,1710811,1710816,2295010,2758009 -c -ns --dir="./Queen/favorites/" 
         $0 --playlist="1008&ya-playlist" --login=my_yandex_login --password=secret
         $0 --tracks=2749751,2295002,1710808,1710811,1710816,2295010,2758009 -c -ns --dir="./MyPlaylists/" --cp=1 --cp-name=Queen
+        $0 --playlist="1042&ya-playlist" -c -cp=1
 EOH
 	exit $g_STATUS_CODE{"OK"};
 }
