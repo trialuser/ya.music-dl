@@ -69,5 +69,8 @@ Usage
 
 ### Hints:
 
-    Yandex doesn't allow to download music from non-russian countries. You may download the tracks throught the proxy: just google and use any free proxy from RU, UA, BY locations... eg. from here: http://spys.ru/free-proxy-list/RU/
+    Yandex doesn't allow to download music from non-russian countries. You may download 
+         the tracks throught the proxy: just google and use any free proxy from RU, UA, BY 
+         locations... eg. from here: http://spys.ru/free-proxy-list/RU/
+      Sample:
          ya.music-dl.pl --artists=3120,79215 --proxy="195.189.123.134:3128"
