@@ -67,3 +67,7 @@ Usage
          ya.music-dl.pl --tracks=2749751,2295002,1710808,1710811,1710816,2295010,2758009 -c -ns --dir="./MyPlaylists/" --cp=1 --cp-name=Queen
          ya.music-dl.pl --playlist="1042&ya-playlist" -c -cp=1
 
+### Hints:
+
+    Yandex doesn't allow to download music from non-russian countries. You may download the tracks throught the proxy: just google and use any free proxy from RU, UA, BY locations... eg. from here: http://spys.ru/free-proxy-list/RU/
+         ya.music-dl.pl --artists=3120,79215 --proxy="195.189.123.134:3128"
