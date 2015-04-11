@@ -146,7 +146,7 @@ package HelperHTTPClient; {
    has ya_auth_url => 'https://passport.yandex.ru/passport?mode=embeddedauth';
    has artist_albums_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/artist_albums_list.xml?artist=0'); };
    has artist_tracks_url =>  sub { Mojo::URL->new('https://music.yandex.ru/handlers/artist.jsx?what=tracks&artist=0'); };
-   has playlist_tracks_url =>  sub { Mojo::URL->new('https://music.yandex.ru/handlers/playlist.jsx?owner=o&kinds=0&light=true'); };
+   has playlist_tracks_url =>  sub { Mojo::URL->new('https://music.yandex.ru/handlers/playlist.jsx?owner=o&kinds=0&light=false'); };
    has playlist_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own'); };
    #has playlist_url =>  'http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own';
    has playlist_url_tracks =>  sub { Mojo::URL->new('http://music.yandex.ru/get/tracks.xml?tracks=0'); };
