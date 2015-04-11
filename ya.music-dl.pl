@@ -146,6 +146,7 @@ package HelperHTTPClient; {
    has ya_auth_url => 'https://passport.yandex.ru/passport?mode=embeddedauth';
    has artist_albums_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/artist_albums_list.xml?artist=0'); };
    has artist_tracks_url =>  sub { Mojo::URL->new('https://music.yandex.ru/handlers/artist.jsx?what=tracks&artist=0'); };
+   has playlist_tracks_url =>  sub { Mojo::URL->new('https://music.yandex.ru/handlers/playlist.jsx?owner=o&kinds=0&light=true'); };
    has playlist_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own'); };
    #has playlist_url =>  'http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own';
    has playlist_url_tracks =>  sub { Mojo::URL->new('http://music.yandex.ru/get/tracks.xml?tracks=0'); };
@@ -507,47 +508,6 @@ EOH
       }
       return $tx->res->json;
    }
-   sub get_playlist_tracks {
-      my ($playlist_id, $playlist_owner) = (shift, shift);
-      
-      $helper_locale->print("downloading playlist: ".$playlist_id.", owner: ".$playlist_owner);
-      my $playlist_url = $helper_http_client->playlist_url->clone;
-      $playlist_url->query->param( kinds => $playlist_id);
-      $playlist_url->query->param( owner => $playlist_owner);
-      
-      my $tx = $helper_http_client->ua->build_tx(GET => $playlist_url->to_string);
-      $tx->req->headers->accept('*/*');
-      $tx = $helper_http_client->ua->start($tx);
-      if ($tx->error) {
-         if ($tx->error->{code} == 503) {
-            $helper_locale->print("Error code 503: it seems to be you are from the region that is blocked with company policy. Try to use a proxy-server from the Russian region") and return undef;
-         } else {
-            warn 'ERROR get get_playlist_tracks for ' . $playlist_id.': ' and $helper_locale->print_hash($tx->error) and return undef;
-         }
-      }
-      my $tracks = $tx->res->json->{playlists}[0]{tracks};
-      my $i = 0;
-      my $tracks_url="";
-      for my $track_id (@{$tracks}){
-         $i+=1;
-         $tracks_url = $tracks_url .",".$track_id;
-      }
-      $tracks_url =~ s/^,//;
-      
-      print "Getting the list, total: ".$i." track(s)\n";
-      my $playlist_url_tracks = $helper_http_client->playlist_url_tracks->clone;
-      $playlist_url_tracks->query->param( tracks => $tracks_url);
-      my $tx2 = $helper_http_client->ua->get($playlist_url_tracks);
-      if ($tx2->error) {
-         if ($tx2->error->{code} == 503) {
-            $helper_locale->print("Error code 503: it seems to be you are from the region that is blocked with company policy. Try to use a proxy-server from the Russian region") and return undef;
-         } else {
-            warn 'ERROR get playlist_url_tracks for ' . $i . ' track(s): ' and $helper_locale->print_hash($tx2->error) and return undef;
-         }
-      }
-      $tx->res->json->{tracks} = $tx2->res->json->{tracks};
-      return $tx->res->json;
-   }
    sub download_artist_albums {
       my ($artist_id) = (shift);
       $helper_locale->print("Downloading album(s) for artist: ".$artist_id);
@@ -637,21 +597,36 @@ EOH
       my $playlist_id = $1;
       $playlist =~ m/^\d*\&(.*)$/;
       my $playlist_owner = $1;
-      my $playlist_hash = get_playlist_tracks( $playlist_id, $playlist_owner);
-      my $title = $playlist_hash->{playlists}[0]{title};
-      # hierarchy: "base_dir/@playlist_owner/id - title/id - artist - track.mp3"
-      $save_path = $base_path."@".strip_slashes($playlist_owner)."/".$playlist_id." - ".strip_slashes($title)."/";
-      my $i = 0;
-      playlist_start("@".$playlist_owner."-".$playlist_id);
-      for my $track_hash (@{$playlist_hash->{tracks}}){
-         $i+=1;
-         my $cover_url = $track_hash->{cover};
-         if ($cover_url =~ /^http.*\.30x30\.(jpg|gif|png)$/i) { 
-            $cover_url =~ s/\.30x30\./\.460x460\./g;
+      my $playlist_url = $helper_http_client->playlist_tracks_url->clone;
+      $playlist_url->query->param( kinds => $playlist_id);
+      $playlist_url->query->param( owner => $playlist_owner);
+      my $tx = $helper_http_client->ua->get($playlist_url);
+      if ($tx->error) {
+         if ($tx->error->{code} == 503) {
+            $helper_locale->print("Error code 503: it seems to be you are from the region that is blocked with company policy. Try to use a proxy-server from the Russian region") and return undef;
+         } else {
+            warn 'ERROR get download_artist_tracks for ' . $playlist_id.': ' and $helper_locale->print_hash($tx->error) and return undef;
          }
-         save_track( $track_hash, $i, undef , $cover_url);
+      }
+      my $tracks_hash = $tx->res->json;
+      my $playlist_title = $playlist_id;
+      $playlist_title = $tracks_hash->{playlist}->{title} if $tracks_hash->{playlist}->{title};
+      # hierarchy: "base_dir/@playlist_owner/id - title/id - artist - track.mp3"
+      $save_path = $base_path."@".strip_slashes($playlist_owner)."/".$playlist_id." - ".strip_slashes($playlist_title)."/";
+      playlist_start("@".$playlist_owner."-".$playlist_id);
+      my $i = 0;
+      for my $track (@{$tracks_hash->{playlist}->{tracks}}){
+         my $cover_url= ""; #"https://music.yandex.ru/i/uAdOyIORVf5NAaC_M5tj9yDlDZY.png"
+         if ($track->{albums}) {
+            if ($track->{albums}[0]) {
+               if ($track->{albums}[0]->{coverUri}) {
+                  $cover_url = $track->{albums}[0]->{coverUri};
+         } } }
+         $i+=1;
+         save_track($track, $i, undef, $cover_url);
       }
       playlist_finish();
+      return;
    }
    sub download_track{
       my($track_id) = (shift);
@@ -836,7 +811,7 @@ EOH
       $num = sprintf("%.*d", 3, $num);
       my $i=0;
       my $title = $track_hash->{title};
-      my $artist;
+      my $artist="";
       if ($track_hash->{artist}) {
          $artist = $track_hash->{artist};
       } else {
@@ -849,7 +824,7 @@ EOH
             $i+=1;
          }
       }
-      my $album;
+      my $album="";
       if ($track_hash->{album}) {
          $album = $track_hash->{album};
       } else {
@@ -873,6 +848,7 @@ EOH
       } else {
          $storageDir = $track_hash->{storageDir};
       }
+      if (!length $storageDir) { $helper_locale->print("  ! Unable to get URL and metadata for the track \"".$artist."\" - \"".$title."\" (\"".$album."\")"); return; }
       my $mp3_url = $helper_http_client->generate_track_url_path($storageDir, $track_hash->{id});
       my $mp3_local_dir = get_track_local_dir();
       my $mp3_local = get_track_local_path($mp3_local_dir, $artist, $title, $num);
