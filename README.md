@@ -9,10 +9,12 @@ It allows to download tracks, playlists, albums from the online-service http://m
 Installation:
 -------
 
+    cpan install URI::Escape
     cpan install IO::Socket::SSL
     cpan install Mojo
     cpan install MP3::Tag
-
+    
+    Note: It also requires installed: perl, libperl-dev, libyaml-perl
 
 Usage
 -------
@@ -55,6 +57,10 @@ Usage
          - create playlist-file. Available formats: m3u (id=1), pls (id=2)
      --cp-name=NAME
          - set the name for playlist-file (without extension). NAME - english only!
+    -lc or --locale_console
+        - set the codepage for system console (for output messages)
+    -lfs or --locale_filesystem
+        - set the codepage for filenames
      --help
          - print this help
     

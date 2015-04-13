@@ -8,18 +8,36 @@ package HelperLocale; {
    my $cp_filecontent;
    sub new {
       my($self) = @_;
-      detect_system();
+      detect_system($self,0,"UTF-8","UTF-8","cp1251");
       return $self;
    }
    sub detect_system {
+      my($self, $overwrite, $lc, $lfs, $lfc) = (shift, shift, shift, shift, shift);
       if ($^O =~ /MSWin32/) {
          $cp_console = "cp866";
          $cp_filesystem = "cp1251";
          $cp_filecontent = "cp1251";
       } else {
-         $cp_console = "iso-8859-7";
-         $cp_filesystem = "cp1251";
-         $cp_filecontent = "cp1251";
+         $locale=`locale|grep LANG=`;
+         $locale =~ s/LANG=//;
+         if ($locale =~ 'UTF-8') {
+            $cp_console = "UTF-8";
+            $cp_filesystem = "UTF-8";
+            $cp_filecontent = "cp1251";
+         } else {
+            if ($overwrite == 0) {
+               print "Warning: unable to detect system locale. Use command options -lc, -lfs and -lfc to set the codepages.\n";
+               # use default values "UTF-8","UTF-8","cp1251":
+               $cp_console = $lc if ($lc);
+               $cp_filesystem = $lfs if ($lfs);
+               $cp_filecontent = $lfc if ($lfc);
+            }
+         }
+         if ($overwrite) {
+            $cp_console = $lc if ($lc);
+            $cp_filesystem = $lfs if ($lfs);
+            $cp_filecontent = $lfc if ($lfc);
+         }
       }
    }
    sub print {
@@ -301,7 +319,7 @@ package YaMusicDownloader; {
    my $out_playlist_utf;
    my $out_playlist_pls_items;
    my %options = ("albums"=>"","artists"=>"","artist_tracks"=>"","tracks"=>"","playlist"=>"","directory"=>"","no_subdirectories"=>0,"tags_only"=>0,
-       "skip_cover"=>0,"login"=>"","password"=>"","proxy"=>"","cplaylist"=>0,"cplaylist_name"=>"",);
+       "skip_cover"=>0,"login"=>"","password"=>"","proxy"=>"","cplaylist"=>0,"cplaylist_name"=>"","locale_console"=>"","locale_filecontent"=>"","locale_filesystem"=>"");
    my %playlist_formats = ( 0=>'no', 1=>'m3u', 2=>'pls', 3=>'xspf' );
    
    sub new {
@@ -358,6 +376,10 @@ package YaMusicDownloader; {
         xspf (FORMAT_ID=3)
     --cp-name=NAME
         - set the name for playlist-file (without extension). NAME - latin only!
+    -lc or --locale_console
+        - set the codepage for system console (for output messages)
+    -lfs or --locale_filesystem
+        - set the codepage for filenames
     --help
         - print this help
 
@@ -443,9 +465,13 @@ EOH
          "proxy=s"    => \$options{"proxy"},
          "cp=i"       => \$options{"cplaylist"},
          "cp-name=s"  => \$options{"cplaylist_name"},
+         "lc|locale_console=s" => \$options{"locale_console"},
+         "lfs|locale_filesystem=s" => \$options{"locale_filesystem"},
+         "lfc|locale_filecontent=s" => \$options{"locale_filecontent"},
       ) or print_usage;
       print_usage unless $options{"albums"} || $options{"artists"} || $options{"artist_tracks"} || $options{"tracks"} || $options{"playlist"};
       # update options
+      $helper_locale->detect_system(1, $options{"locale_console"}, $options{"locale_filesystem"}, $options{"locale_filecontent"}) if ($options{"locale_console"} || $options{"locale_filesystem"} || $options{"locale_filecontent"});
       $base_path = $options{"directory"} if ($options{"directory"} =~ /^[-\w\.\/]+$/);
       no warnings 'numeric';
       if ($options{"proxy"} && $options{"proxy"} =~ /^[a-zA-Z0-9\.-]{1,}\:[0-9]{1,5}$/) {
