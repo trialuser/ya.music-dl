@@ -33,11 +33,11 @@ package HelperLocale; {
                $cp_filecontent = $lfc if ($lfc);
             }
          }
-         if ($overwrite) {
-            $cp_console = $lc if ($lc);
-            $cp_filesystem = $lfs if ($lfs);
-            $cp_filecontent = $lfc if ($lfc);
-         }
+      }
+      if ($overwrite) {
+         $cp_console = $lc if ($lc);
+         $cp_filesystem = $lfs if ($lfs);
+         $cp_filecontent = $lfc if ($lfc);
       }
    }
    sub print {
@@ -161,9 +161,10 @@ package HelperHTTPClient; {
       return $ua;
    };
    has json => sub { Mojo::JSON->new };
+   has blank_url => 'https://music.yandex.ru/';
    has ya_auth_url => 'https://passport.yandex.ru/passport?mode=embeddedauth';
-   has artist_albums_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/artist_albums_list.xml?artist=0'); };
-   has artist_tracks_url =>  sub { Mojo::URL->new('https://music.yandex.ru/handlers/artist.jsx?what=tracks&artist=0'); };
+   has artist_albums_url =>  sub { Mojo::URL->new('https://music.yandex.ru/handlers/artist.jsx?artist=0&what=albums&sort=year&dir=&experiments=&lang=ru&external-domain=music.yandex.ru&overembed=false'); };
+   has artist_tracks_url =>  sub { Mojo::URL->new('https://music.yandex.ru/handlers/artist.jsx?artist=0&what=tracks&sort=&dir=&experiments=&lang=ru&external-domain=music.yandex.ru&overembed=false'); };
    has playlist_tracks_url =>  sub { Mojo::URL->new('https://music.yandex.ru/handlers/playlist.jsx?owner=o&kinds=0&light=false'); };
    has playlist_url =>  sub { Mojo::URL->new('http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own'); };
    #has playlist_url =>  'http://music.yandex.ru/get/playlist2.xml?kinds=o&owner=own';
@@ -178,6 +179,11 @@ package HelperHTTPClient; {
    sub init_yandex_helper{
       my ($self, $yh) = (shift, shift);
       $helper_yandex = $yh;
+      my $tx = $self->get_page( $self->blank_url );
+      if ($tx->error) {
+         if ($tx->error->{code} == 503) {
+         }
+      }
       return;
    }
    sub set_proxy {
@@ -361,7 +367,7 @@ package YaMusicDownloader; {
         following format: LOGIN:PASSWORD\@SERVER:PORT, i.e.: "user:secure\@127.0.0.1:8080"
     
     Options:
-    -c or --cover 
+    -sc or --skip_cover 
         - do NOT get cover for each track from Yandex.Music and do NOT add it as ID3v2 tag
     --dir=DIRECTORY
         - set output directory. Default value: ./ya.music/
@@ -402,6 +408,7 @@ EOH
       } else {
          #$data =~ s{/}{ }g;
          $data =~ s/[\/\\"'`<>]/\ /g;
+         $data =~ s/[:]/-/g;
          return $data;
       }
    }
@@ -457,7 +464,7 @@ EOH
          "tracks=s"   => \$options{"tracks"},
          "playlist=s" => \$options{"playlist"},
          "dir=s",     => \$options{"directory"},
-         "c|cover"    => \$options{"skip_cover"},
+         "sc|skip_cover"    => \$options{"skip_cover"},
          "ns|no_subdirectories" => \$options{"no_subdirectories"},
          "to|tags_only"         => \$options{"tags_only"},
          "login=s"    => \$options{"login"},
@@ -549,8 +556,8 @@ EOH
       }
       my $albums_hash = $tx->res->json;
       playlist_start("Artist albums - ".$artist_id);
-      for my $album_id (@{$albums_hash->{albums}}){
-         download_album($album_id);
+      for my $album (@{$albums_hash->{albums}}){
+         download_album($album->{id});
       }
       playlist_finish();
       return;
@@ -874,7 +881,12 @@ EOH
       } else {
          $storageDir = $track_hash->{storageDir};
       }
-      if (!length $storageDir) { $helper_locale->print("  ! Unable to get URL and metadata for the track \"".$artist."\" - \"".$title."\" (\"".$album."\")"); return; }
+      if (!length $storageDir)
+      {
+         $helper_locale->print("  ! Unable to get URL and metadata for the track \"".$artist."\" - \"".$title."\" (\"".$album."\")"); 
+         $helper_locale->print("      Possible error: ".$track_hash->{error}) if ($track_hash->{error});
+         return;
+      }
       my $mp3_url = $helper_http_client->generate_track_url_path($storageDir, $track_hash->{id});
       my $mp3_local_dir = get_track_local_dir();
       my $mp3_local = get_track_local_path($mp3_local_dir, $artist, $title, $num);
